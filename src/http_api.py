@@ -12,6 +12,10 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+CLAIM_RE = re.compile(r"^/api/records/(\d+)/claim$")
+HANDOVERS_RE = re.compile(r"^/api/records/(\d+)/handovers$")
+HANDOVER_CONFIRM_RE = re.compile(r"^/api/records/(\d+)/handovers/(\d+)/confirm$")
+HANDOVER_CANCEL_RE = re.compile(r"^/api/records/(\d+)/handovers/cancel$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -84,6 +88,13 @@ def make_handler(service: Any, static_dir: Path):
                 if match:
                     self._send(200, {"items": service.timeline(self._actor(), int(match.group(1)))})
                     return
+                match = HANDOVERS_RE.match(parsed.path)
+                if match:
+                    self._send(200, {"items": service.handovers(self._actor(), int(match.group(1)))})
+                    return
+                if parsed.path == "/api/handovers/pending":
+                    self._send(200, {"items": service.my_pending_handovers(self._actor())})
+                    return
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
@@ -106,6 +117,29 @@ def make_handler(service: Any, static_dir: Path):
                         raise ValidationError("expected_version必须是整数")
                     record = service.act(self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {}))
                     self._send(200, record)
+                    return
+                match = CLAIM_RE.match(parsed.path)
+                if match:
+                    record = service.claim(self._actor(), int(match.group(1)))
+                    self._send(200, record)
+                    return
+                match = HANDOVER_CONFIRM_RE.match(parsed.path)
+                if match:
+                    record = service.confirm_handover(self._actor(), int(match.group(1)), int(match.group(2)))
+                    self._send(200, record)
+                    return
+                match = HANDOVER_CANCEL_RE.match(parsed.path)
+                if match:
+                    service.cancel_handover(self._actor(), int(match.group(1)))
+                    self._send(200, {"status": "cancelled"})
+                    return
+                if parsed.path == "/api/handovers":
+                    record_id = body.get("record_id")
+                    if not isinstance(record_id, int):
+                        raise ValidationError("record_id必须是整数")
+                    to_user = body.get("to_user", "")
+                    record = service.start_handover(self._actor(), record_id, to_user)
+                    self._send(201, record)
                     return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:

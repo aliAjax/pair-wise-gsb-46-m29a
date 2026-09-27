@@ -3,31 +3,208 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>急救车调度与目的地分流</title>
+  <title>急救车调度 · 席位认领与换班交接</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
-    pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    :root { --line:#d9dee5; --bg:#f4f6f8; --brand:#1668dc; --warn:#b25f00; --ok:#1a7f37; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 0; color:#17212b; background:var(--bg); }
+    main { max-width: 1080px; margin: auto; padding: 1.5rem; }
+    h1 { font-size: 1.35rem; margin: .2rem 0 1rem; }
+    h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
+    .identity, .card, .timeline { background:#fff; border:1px solid var(--line); border-radius:10px; padding:1rem 1.1rem; margin-bottom:1rem; }
+    .identity { display:flex; flex-wrap:wrap; gap:.7rem; align-items:flex-end; }
+    label { font-size:.8rem; color:#57606a; display:flex; flex-direction:column; gap:.25rem; }
+    input, select { padding:.45rem .55rem; border:1px solid var(--line); border-radius:6px; font-size:.9rem; min-width: 9rem; }
+    button { padding:.45rem .8rem; border-radius:6px; border:1px solid var(--line); background:#fff; cursor:pointer; font-size:.85rem; }
+    button.primary { background:var(--brand); color:#fff; border-color:var(--brand); }
+    button.warn { color:var(--warn); border-color:#e3b384; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .toolbar { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem; }
+    .who { font-size:.85rem; color:#57606a; margin-left:auto; }
+    .card { display:grid; grid-template-columns: 1fr auto; gap:.4rem 1rem; }
+    .ref { font-weight:600; }
+    .state { font-size:.75rem; padding:.15rem .55rem; border-radius:999px; background:#eef3ff; color:var(--brand); }
+    .state.ended { background:#eaf6ec; color:var(--ok); }
+    .meta { grid-column:1 / -1; font-size:.83rem; color:#57606a; display:flex; gap:1.2rem; flex-wrap:wrap; }
+    .owner { font-weight:600; }
+    .owner.none { color:#9aa4af; font-weight:400; }
+    .banner { grid-column:1 / -1; background:#fff8e6; border:1px solid #ecd9a8; color:var(--warn); padding:.5rem .7rem; border-radius:8px; font-size:.85rem; }
+    .actions { grid-column:1 / -1; display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.3rem; }
+    .error { background:#fdecee; border:1px solid #f2b6bd; color:#a01b25; padding:.6rem .8rem; border-radius:8px; margin-bottom:1rem; font-size:.85rem; white-space:pre-wrap; }
+    .ok-msg { background:#eaf6ec; border:1px solid #b7dfc0; color:var(--ok); padding:.6rem .8rem; border-radius:8px; margin-bottom:1rem; font-size:.85rem; }
+    .timeline ol { margin:0; padding-left:1.2rem; }
+    .timeline li { font-size:.85rem; margin-bottom:.35rem; }
+    .timeline .at { color:#9aa4af; font-size:.75rem; margin-left:.4rem; }
+    .muted { color:#9aa4af; font-size:.85rem; }
+    .small { font-size:.75rem; color:#57606a; }
   </style>
 </head>
 <body>
 <main>
-  <h1>急救车调度与目的地分流</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <h1>急救车调度 · 席位认领与换班交接</h1>
+
+  <div class="identity">
+    <label>账号 <input id="uid" value="alice"></label>
+    <label>角色
+      <select id="role">
+        <option value="dispatcher">dispatcher（调度员）</option>
+        <option value="paramedic">paramedic（急救员）</option>
+        <option value="hospital_coordinator">hospital_coordinator（院方）</option>
+        <option value="admin">admin</option>
+      </select>
+    </label>
+    <label>机构 <input id="org" value="station-a"></label>
+    <button id="apply" class="primary">切换身份</button>
+    <span class="small">所有操作都会带 X-User-Id / X-Role / X-Org 请求头</span>
+  </div>
+
+  <div id="notice"></div>
+
+  <div class="toolbar">
+    <button id="refresh" class="primary">刷新未结束任务</button>
+    <button id="show-all">显示全部（含已结束）</button>
+    <button id="my-handovers">我的待确认交接</button>
+    <span class="who" id="who"></span>
+  </div>
+
+  <div id="list"><p class="muted">点击「刷新未结束任务」加载本系统任务。</p></div>
+
+  <div class="timeline" id="timeline-box" hidden>
+    <h2>办理经过</h2>
+    <ol id="timeline"></ol>
+  </div>
 </main>
+
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
-  const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+let actor = {user_id: "alice", role: "dispatcher", organization: "station-a"};
+let onlyOpen = true;
+const $ = id => document.getElementById(id);
+
+function applyIdentity() {
+  actor = {user_id: $("uid").value.trim(), role: $("role").value, organization: $("org").value.trim()};
+  $("who").textContent = "当前身份：" + actor.user_id + " / " + actor.role + " / " + (actor.organization || "无机构");
+  refresh();
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+$("apply").onclick = applyIdentity;
+
+function notify(message, ok) {
+  const box = $("notice");
+  box.innerHTML = '<div class="' + (ok ? "ok-msg" : "error") + '"></div>';
+  box.firstChild.textContent = message;
+}
+
+async function callApi(path, options = {}) {
+  options.headers = Object.assign({}, headers(), options.headers || {});
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((data && data.message) ? data.message : ("请求失败：HTTP " + response.status));
+  return data;
+}
+
+const ENDED = new Set(["closed", "cancelled"]);
+
+async function refresh() {
+  try {
+    const path = onlyOpen ? "/api/records?limit=100" : "/api/records?limit=100";
+    const data = await callApi(path);
+    render(data.items.filter(r => !onlyOpen || !ENDED.has(r.state)));
+  } catch (err) { notify(err.message); }
+}
+$("refresh").onclick = () => { onlyOpen = true; refresh(); };
+$("show-all").onclick = () => { onlyOpen = false; refresh(); };
+$("my-handovers").onclick = async () => {
+  try {
+    const data = await callApi("/api/handovers/pending");
+    if (!data.items.length) { notify("当前没有与你相关的待确认交接", true); return; }
+    const text = data.items.map(h => "任务#" + h.record_id + "：" + h.from_user + " → " + h.to_user + "（" + h.status + "）").join("\n");
+    notify("待确认交接：\n" + text, true);
+  } catch (err) { notify(err.message); }
+};
+
+function esc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+
+function render(items) {
+  const box = $("list");
+  if (!items.length) { box.innerHTML = '<p class="muted">没有符合条件的任务。</p>'; return; }
+  box.innerHTML = "";
+  for (const r of items) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const pending = r.pending_handover;
+    const isOwner = r.owner_id === actor.user_id;
+    const isSuccessor = pending && pending.to_user === actor.user_id;
+    const seatRole = actor.role === "dispatcher" || actor.role === "admin";
+    const canClaim = seatRole && !r.owner_id && !ENDED.has(r.state);
+    const canHandover = seatRole && isOwner && !ENDED.has(r.state) && !pending;
+    const canCancel = seatRole && pending && (pending.from_user === actor.user_id || actor.role === "admin");
+    let banner = "";
+    if (pending) {
+      banner = '<div class="banner">待确认交接：' + esc(pending.from_user) + '（原调度员继续办理） → ' + esc(pending.to_user) +
+        (isSuccessor ? "；你是接班人，请确认接管" : "；等待接班人确认") + '</div>';
+    }
+    card.innerHTML =
+      '<div><span class="ref">#' + r.id + ' ' + esc(r.reference) + '</span></div>' +
+      '<span class="state' + (ENDED.has(r.state) ? " ended" : "") + '">' + esc(r.state) + ' · v' + r.version + '</span>' +
+      '<div class="meta">' +
+        '<span>负责人：<span class="owner ' + (r.owner_id ? "" : "none") + '">' + esc(r.owner_id || "未认领") + '</span></span>' +
+        '<span>机构：' + esc(r.organization || "未分配") + '</span>' +
+        '<span>车辆：' + esc(r.payload.assigned_vehicle_id || "未派车") + '</span>' +
+        '<span>目的地：' + esc(r.payload.destination || "-") + '</span>' +
+      '</div>' + banner +
+      '<div class="actions">' +
+        '<button data-act="claim"' + (canClaim ? "" : " disabled") + '>认领席位</button>' +
+        '<button data-act="handover"' + (canHandover ? "" : " disabled") + '>发起换班交接</button>' +
+        '<button data-act="confirm" class="primary"' + (isSuccessor ? "" : " disabled") + '>确认接管</button>' +
+        '<button data-act="cancel" class="warn"' + (canCancel ? "" : " disabled") + '>撤销交接</button>' +
+        '<button data-act="timeline">办理经过</button>' +
+      '</div>';
+    card.querySelector('[data-act="claim"]').onclick = () => claim(r.id);
+    card.querySelector('[data-act="handover"]').onclick = () => startHandover(r.id);
+    card.querySelector('[data-act="confirm"]').onclick = () => confirmHandover(r.id, pending.id);
+    card.querySelector('[data-act="cancel"]').onclick = () => cancelHandover(r.id);
+    card.querySelector('[data-act="timeline"]').onclick = () => timeline(r.id);
+    box.appendChild(card);
+  }
+}
+
+async function claim(id) {
+  try { await callApi("/api/records/" + id + "/claim", {method: "POST", body: "{}"}); notify("认领成功，任务 #" + id + " 已归你", true); await refresh(); }
+  catch (err) { notify(err.message); }
+}
+async function startHandover(id) {
+  const toUser = prompt("接班人账号（必须为本机构调度员）：");
+  if (!toUser) return;
+  try {
+    await callApi("/api/handovers", {method: "POST", body: JSON.stringify({record_id: id, to_user: toUser.trim()})});
+    notify("交接已发起，等待「" + toUser.trim() + "」确认；确认前你仍可办理", true);
+    await refresh();
+  } catch (err) { notify(err.message); }
+}
+async function confirmHandover(id, handoverId) {
+  try {
+    await callApi("/api/records/" + id + "/handovers/" + handoverId + "/confirm", {method: "POST", body: "{}"});
+    notify("已确认接管任务 #" + id + "，旧账号现在只能查看", true);
+    await refresh();
+    await timeline(id);
+  } catch (err) { notify(err.message); }
+}
+async function cancelHandover(id) {
+  try { await callApi("/api/records/" + id + "/handovers/cancel", {method: "POST", body: "{}"}); notify("交接已撤销", true); await refresh(); }
+  catch (err) { notify(err.message); }
+}
+async function timeline(id) {
+  try {
+    const data = await callApi("/api/records/" + id + "/audit");
+    $("timeline-box").hidden = false;
+    $("timeline").innerHTML = data.items.map(e =>
+      '<li><b>' + esc(e.action) + '</b> · ' + esc(e.actor_id) +
+      ' · ' + esc((e.details && e.details.summary) || JSON.stringify(e.details || {})) +
+      '<span class="at">' + esc(e.created_at) + '</span></li>').join("");
+  } catch (err) { notify(err.message); }
+}
+
+applyIdentity();
 </script>
 </body>
 </html>

@@ -7,11 +7,19 @@ from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, 
 INITIAL_STATE = "received"
 CREATE_ROLES = {'dispatcher'}
 ACTION_ROLES = {'assign': {'dispatcher'}, 'enroute': {'dispatcher', 'paramedic'}, 'arrive': {'paramedic'}, 'transport': {'paramedic', 'hospital_coordinator'}, 'handover': {'paramedic', 'hospital_coordinator'}, 'cancel': {'dispatcher'}}
+# 席位角色：这些角色的写操作必须持有任务席位（负责人身份）
+SEAT_ROLES = {'dispatcher'}
 TRANSITIONS = {'assign': {'received': 'assigned'}, 'enroute': {'assigned': 'enroute'}, 'arrive': {'enroute': 'onscene'}, 'transport': {'onscene': 'transporting'}, 'handover': {'transporting': 'closed'}, 'cancel': {'received': 'cancelled', 'assigned': 'cancelled', 'enroute': 'cancelled'}}
 
 
 class DomainRules:
     INITIAL_STATE = INITIAL_STATE
+
+    def role_uses_seat(self, role: str) -> bool:
+        return role in SEAT_ROLES
+
+    def role_can_claim_seat(self, role: str) -> bool:
+        return role == "admin" or role in SEAT_ROLES
 
     def known_role(self, role: str) -> bool:
         all_roles = set(CREATE_ROLES)
