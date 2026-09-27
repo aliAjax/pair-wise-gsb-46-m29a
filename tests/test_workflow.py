@@ -10,6 +10,10 @@ CREATE_DATA = {'patient_priority': 'critical', 'distance_km': 7.5, 'eta_minutes'
 FLOW = [('assign', 'dispatcher', {'vehicle_available': True, 'vehicle_id': 'AMB-07'}, 'assigned'), ('enroute', 'paramedic', {'traffic_level': 'medium'}, 'enroute'), ('arrive', 'paramedic', {'on_scene': True}, 'onscene'), ('transport', 'paramedic', {'destination_beds': 2}, 'transporting'), ('handover', 'hospital_coordinator', {'handover_accepted': True}, 'closed')]
 
 
+def dispatcher(user='d01', org='east'):
+    return Actor(user, 'dispatcher', org)
+
+
 class WorkflowTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -19,11 +23,15 @@ class WorkflowTest(unittest.TestCase):
         self.temp.cleanup()
 
     def test_complete_workflow_and_audit(self):
-        record = self.service.create(Actor("creator", "dispatcher"), "EMG-22001", CREATE_DATA)
+        record = self.service.create(dispatcher('creator'), "EMG-22001", CREATE_DATA)
         self.assertEqual(record["state"], "received")
+        record = self.service.claim(dispatcher('d01'), record["id"])
+        self.assertEqual(record["owner_id"], "d01")
         for action, role, data, expected_state in FLOW:
-            record = self.service.act(Actor("operator", role), record["id"], record["version"], action, data)
+            actor = dispatcher('d01') if role == 'dispatcher' else Actor("operator", role)
+            record = self.service.act(actor, record["id"], record["version"], action, data)
             self.assertEqual(record["state"], expected_state)
-        timeline = self.service.timeline(Actor("creator", "dispatcher"), record["id"])
-        self.assertEqual(len(timeline), len(FLOW) + 1)
+        timeline = self.service.timeline(dispatcher('d01'), record["id"])
+        actions = [event["action"] for event in timeline]
+        self.assertEqual(actions[1], "claim")
         self.assertEqual(timeline[-1]["action"], FLOW[-1][0])

@@ -10,6 +10,10 @@ CREATE_DATA = {'patient_priority': 'critical', 'distance_km': 7.5, 'eta_minutes'
 FLOW = [('assign', 'dispatcher', {'vehicle_available': True, 'vehicle_id': 'AMB-07'}, 'assigned'), ('enroute', 'paramedic', {'traffic_level': 'medium'}, 'enroute'), ('arrive', 'paramedic', {'on_scene': True}, 'onscene'), ('transport', 'paramedic', {'destination_beds': 2}, 'transporting'), ('handover', 'hospital_coordinator', {'handover_accepted': True}, 'closed')]
 
 
+def dispatcher(user='d01', org='east'):
+    return Actor(user, 'dispatcher', org)
+
+
 class FailureTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -21,14 +25,21 @@ class FailureTest(unittest.TestCase):
     def test_permission_and_duplicate(self):
         with self.assertRaises(PermissionDenied):
             self.service.create(Actor("outsider", "outsider"), "EMG-22001", CREATE_DATA)
-        self.service.create(Actor("creator", "dispatcher"), "EMG-22001", CREATE_DATA)
+        self.service.create(dispatcher('creator'), "EMG-22001", CREATE_DATA)
         with self.assertRaises(Conflict):
-            self.service.create(Actor("creator", "dispatcher"), "EMG-22001", CREATE_DATA)
+            self.service.create(dispatcher('creator'), "EMG-22001", CREATE_DATA)
 
     def test_stale_version_is_rejected(self):
-        record = self.service.create(Actor("creator", "dispatcher"), "EMG-22001", CREATE_DATA)
+        record = self.service.create(dispatcher('creator'), "EMG-22001", CREATE_DATA)
+        record = self.service.claim(dispatcher('d01'), record["id"])
         first = FLOW[0]
-        record = self.service.act(Actor("operator", first[1]), record["id"], record["version"], first[0], first[2])
+        record = self.service.act(dispatcher('d01'), record["id"], record["version"], first[0], first[2])
         second = FLOW[1]
         with self.assertRaises(Conflict):
             self.service.act(Actor("operator", second[1]), record["id"], record["version"] - 1, second[0], second[2])
+
+    def test_dispatcher_must_claim_before_act(self):
+        record = self.service.create(dispatcher('creator'), "EMG-22001", CREATE_DATA)
+        first = FLOW[0]
+        with self.assertRaises(PermissionDenied):
+            self.service.act(dispatcher('d02'), record["id"], record["version"], first[0], first[2])

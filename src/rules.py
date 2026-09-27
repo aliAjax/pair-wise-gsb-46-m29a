@@ -5,6 +5,7 @@ from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, 
 
 
 INITIAL_STATE = "received"
+FINISHED_STATES = {"closed", "cancelled"}
 CREATE_ROLES = {'dispatcher'}
 ACTION_ROLES = {'assign': {'dispatcher'}, 'enroute': {'dispatcher', 'paramedic'}, 'arrive': {'paramedic'}, 'transport': {'paramedic', 'hospital_coordinator'}, 'handover': {'paramedic', 'hospital_coordinator'}, 'cancel': {'dispatcher'}}
 TRANSITIONS = {'assign': {'received': 'assigned'}, 'enroute': {'assigned': 'enroute'}, 'arrive': {'enroute': 'onscene'}, 'transport': {'onscene': 'transporting'}, 'handover': {'transporting': 'closed'}, 'cancel': {'received': 'cancelled', 'assigned': 'cancelled', 'enroute': 'cancelled'}}
@@ -12,6 +13,8 @@ TRANSITIONS = {'assign': {'received': 'assigned'}, 'enroute': {'assigned': 'enro
 
 class DomainRules:
     INITIAL_STATE = INITIAL_STATE
+    FINISHED_STATES = FINISHED_STATES
+    SEAT_ROLES = {'dispatcher'}
 
     def known_role(self, role: str) -> bool:
         all_roles = set(CREATE_ROLES)

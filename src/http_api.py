@@ -7,11 +7,16 @@ from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
 
 from .domain import Actor, DomainError, PermissionDenied, ValidationError
+from .repository import HANDOVER_PENDING
 
 
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+CLAIM_RE = re.compile(r"^/api/records/(\d+)/claim$")
+HANDOVERS_CREATE_RE = re.compile(r"^/api/records/(\d+)/handovers$")
+HANDOVER_RE = re.compile(r"^/api/handovers/(\d+)$")
+HANDOVER_DECISION_RE = re.compile(r"^/api/handovers/(\d+)/(accept|decline|revoke)$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -26,7 +31,7 @@ def make_handler(service: Any, static_dir: Path):
             role = self.headers.get("X-Role", "").strip()
             if not user_id or not role:
                 raise PermissionDenied("缺少X-User-Id或X-Role")
-            return Actor(user_id=user_id, role=role, organization=self.headers.get("X-Org", ""))
+            return Actor(user_id=user_id, role=role, organization=self.headers.get("X-Org", "").strip())
 
         def _body(self) -> Dict[str, Any]:
             try:
@@ -64,6 +69,7 @@ def make_handler(service: Any, static_dir: Path):
         def do_GET(self) -> None:
             try:
                 parsed = urlparse(self.path)
+                query = parse_qs(parsed.query)
                 if parsed.path == "/health":
                     self._send(200, {"status": "ok", "service": "ambulance-dispatch", "database": service.repository.health()})
                     return
@@ -72,9 +78,13 @@ def make_handler(service: Any, static_dir: Path):
                     self._send(200, page, "text/html; charset=utf-8")
                     return
                 if parsed.path == "/api/records":
-                    query = parse_qs(parsed.query)
                     records = service.list_records(self._actor(), state=query.get("state", [None])[0], limit=int(query.get("limit", ["100"])[0]))
                     self._send(200, {"items": records})
+                    return
+                if parsed.path == "/api/tasks":
+                    scope = query.get("scope", ["open"])[0]
+                    items = service.list_tasks(self._actor(), scope=scope, limit=int(query.get("limit", ["100"])[0]))
+                    self._send(200, {"items": items})
                     return
                 match = RECORD_RE.match(parsed.path)
                 if match:
@@ -83,6 +93,18 @@ def make_handler(service: Any, static_dir: Path):
                 match = AUDIT_RE.match(parsed.path)
                 if match:
                     self._send(200, {"items": service.timeline(self._actor(), int(match.group(1)))})
+                    return
+                if parsed.path == "/api/handovers":
+                    items = service.list_handovers(
+                        self._actor(),
+                        direction=query.get("direction", ["incoming"])[0],
+                        status=query.get("status", [HANDOVER_PENDING])[0],
+                    )
+                    self._send(200, {"items": items})
+                    return
+                match = HANDOVER_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.get_handover(self._actor(), int(match.group(1))))
                     return
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
@@ -98,6 +120,33 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                match = CLAIM_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.claim(self._actor(), int(match.group(1))))
+                    return
+                match = HANDOVERS_CREATE_RE.match(parsed.path)
+                if match:
+                    result = service.start_handover(self._actor(), int(match.group(1)), body.get("data", body))
+                    self._send(201, result)
+                    return
+                match = HANDOVER_DECISION_RE.match(parsed.path)
+                if match:
+                    handover_id = int(match.group(1))
+                    decision = match.group(2)
+                    if decision == "accept":
+                        result = service.accept_handover(self._actor(), handover_id)
+                    elif decision == "decline":
+                        reason = ""
+                        data = body.get("data")
+                        if isinstance(data, dict):
+                            reason = str(data.get("reason", ""))
+                        elif isinstance(body.get("reason"), str):
+                            reason = body["reason"]
+                        result = service.decline_handover(self._actor(), handover_id, reason.strip())
+                    else:
+                        result = service.revoke_handover(self._actor(), handover_id)
+                    self._send(200, result)
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:

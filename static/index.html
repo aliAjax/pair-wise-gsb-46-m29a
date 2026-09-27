@@ -3,31 +3,286 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>急救车调度与目的地分流</title>
+  <title>急救调度席位与换班交接</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
-    pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    :root { --line:#d9e0e7; --muted:#6b7785; --blue:#1a6fe8; --green:#16803c; --red:#c0392b; --amber:#9a6b00; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 0; color: #17212b; background: #f5f7fa; }
+    main { max-width: 1080px; margin: auto; padding: 1.25rem; }
+    h1 { font-size: 1.3rem; margin: .25rem 0; }
+    h2 { font-size: 1rem; margin: 0 0 .6rem; }
+    .sub { color: var(--muted); font-size: .85rem; margin: .2rem 0 1rem; }
+    .bar, section, .detail-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+    .bar { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+    label { font-size: .8rem; color: var(--muted); display: flex; flex-direction: column; gap: .25rem; }
+    input, select { padding: .45rem .55rem; border: 1px solid var(--line); border-radius: 6px; font-size: .9rem; min-width: 8rem; }
+    button { padding: .45rem .8rem; border: 1px solid var(--blue); background: var(--blue); color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+    button.secondary { background: #fff; color: var(--blue); }
+    button.danger { background: #fff; color: var(--red); border-color: var(--red); }
+    button.ghost { background: #fff; color: var(--muted); border-color: var(--line); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+    .item { border: 1px solid var(--line); border-radius: 8px; padding: .7rem .8rem; margin-bottom: .6rem; }
+    .item .title { font-weight: 600; }
+    .meta { color: var(--muted); font-size: .8rem; margin: .25rem 0 .5rem; }
+    .actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+    .tag { display: inline-block; font-size: .72rem; padding: .1rem .45rem; border-radius: 99px; background: #eef2f7; color: #334155; margin-right: .3rem; }
+    .tag.owner { background: #e7f1ff; color: var(--blue); }
+    .tag.pending { background: #fff4e0; color: var(--amber); }
+    .tag.done { background: #e6f4ec; color: var(--green); }
+    .banner { border-left: 3px solid var(--amber); background: #fff8ec; padding: .5rem .7rem; border-radius: 4px; font-size: .85rem; margin: .5rem 0; }
+    .banner.readonly { border-color: var(--red); background: #fdeeec; }
+    #msg { display: none; padding: .6rem .8rem; border-radius: 8px; margin-bottom: 1rem; font-size: .85rem; white-space: pre-wrap; }
+    #msg.error { display: block; background: #fdeeec; color: var(--red); border: 1px solid #f2c1bb; }
+    #msg.ok { display: block; background: #e6f4ec; color: var(--green); border: 1px solid #bfe3cd; }
+    ol.timeline { list-style: none; margin: 0; padding: 0; }
+    ol.timeline li { border-left: 2px solid var(--line); padding: 0 0 .8rem .8rem; position: relative; font-size: .85rem; }
+    ol.timeline li::before { content: ""; position: absolute; left: -5px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); }
+    ol.timeline .when { color: var(--muted); font-size: .75rem; }
+    .kv { display: grid; grid-template-columns: 6.5rem 1fr; gap: .3rem .6rem; font-size: .88rem; }
+    .kv .k { color: var(--muted); }
+    .empty { color: var(--muted); font-size: .85rem; }
   </style>
 </head>
 <body>
 <main>
-  <h1>急救车调度与目的地分流</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <h1>急救调度 · 席位认领与换班交接</h1>
+  <p class="sub">同一时刻一单只归一人：先认领本机构未结束任务，再办理；发起交接后接班人确认前原调度员继续办理，确认后旧账号只能查看。</p>
+
+  <div class="bar">
+    <label>当前账号<input id="uid" value="d-old"></label>
+    <label>角色
+      <select id="role">
+        <option value="dispatcher">dispatcher（调度员）</option>
+        <option value="paramedic">paramedic（急救员）</option>
+        <option value="hospital_coordinator">hospital_coordinator（医院协调员）</option>
+        <option value="admin">admin</option>
+      </select>
+    </label>
+    <label>所属机构<input id="org" value="east"></label>
+    <button onclick="refreshAll()">刷新全部</button>
+  </div>
+
+  <div id="msg"></div>
+
+  <div class="grid">
+    <section>
+      <h2>① 待认领任务（本机构未结束）</h2>
+      <div id="unclaimed"><span class="empty">加载中…</span></div>
+    </section>
+    <section>
+      <h2>② 我负责的席位任务</h2>
+      <div id="mine"><span class="empty">加载中…</span></div>
+    </section>
+  </div>
+
+  <section>
+    <h2>③ 待我确认的交接（换班接班人视角）</h2>
+    <div id="incoming"><span class="empty">加载中…</span></div>
+  </section>
+
+  <section>
+    <h2>④ 记录详情：负责人 / 待确认交接 / 办理经过</h2>
+    <div class="actions" style="margin-bottom:.6rem">
+      <input id="detailId" placeholder="输入记录ID，如 1" style="min-width:14rem">
+      <button onclick="loadDetail()">查询</button>
+    </div>
+    <div id="detail"><span class="empty">输入记录ID后查询。</span></div>
+  </section>
 </main>
+
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
-  const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+const ACTION_LABELS = {
+  created: "建单", claim: "席位认领", assign: "派车", enroute: "车辆出发", arrive: "到场",
+  transport: "开始转运", handover: "医院交接完成", cancel: "任务取消",
+  handover_start: "发起换班交接", handover_accept: "接班人确认",
+  handover_decline: "接班人拒绝", handover_revoke: "撤销交接"
+};
+const STATE_LABELS = {received: "已接警", assigned: "已派车", enroute: "出车中", onscene: "已到场", transporting: "转运中", closed: "已结束", cancelled: "已取消"};
+
+function headers() {
+  return {"X-User-Id": uid(), "X-Role": document.getElementById("role").value, "X-Org": document.getElementById("org").value.trim()};
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+function uid() { return document.getElementById("uid").value.trim(); }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function fmtTime(t) { return t ? new Date(t).toLocaleString("zh-CN", {hour12: false}) : ""; }
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {headers: headers(), ...options});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data && data.message) ? data.message : ("请求失败(" + res.status + ")"));
+  }
+  return data;
+}
+function notify(message, ok = false) {
+  const box = document.getElementById("msg");
+  box.textContent = message;
+  box.className = ok ? "ok" : "error";
+}
+function clearNotify() { document.getElementById("msg").className = ""; }
+
+async function safe(fn) {
+  clearNotify();
+  try { await fn(); } catch (e) { notify("✕ " + e.message); }
+}
+
+function taskCard(r, mode) {
+  const pending = r.pending_handover;
+  let banner = "";
+  if (pending) {
+    banner = `<div class="banner">待确认交接：${esc(pending.from_user)} → ${esc(pending.to_user)}${pending.note ? "（" + esc(pending.note) + "）" : ""}，确认前原调度员继续办理</div>`;
+  }
+  let actions = "";
+  if (mode === "unclaimed") {
+    actions = `<button onclick="claim(${r.id})">认领本单</button>`;
+  } else {
+    actions = `<button class="secondary" onclick="startHandover(${r.id})">发起换班交接</button>
+               <button class="ghost" onclick="loadDetailById(${r.id})">查看经过</button>`;
+  }
+  return `<div class="item">
+    <div class="title">#${r.id} ${esc(r.reference)}</div>
+    <div class="meta">
+      <span class="tag">${esc(STATE_LABELS[r.state] || r.state)}</span>
+      <span class="tag owner">负责人：${esc(r.owner_id || "（待认领）")}</span>
+      <span class="tag">机构：${esc(r.organization || "—")}</span>
+    </div>${banner}<div class="actions">${actions}</div></div>`;
+}
+
+async function refreshAll() {
+  await safe(async () => {
+    const [open, mine, incoming] = await Promise.all([
+      api("/api/tasks?scope=unclaimed"),
+      api("/api/tasks?scope=mine"),
+      api("/api/handovers?direction=incoming&status=pending")
+    ]);
+    document.getElementById("unclaimed").innerHTML = open.items.length ? open.items.map(r => taskCard(r, "unclaimed")).join("") : '<span class="empty">本机构暂无待认领任务。</span>';
+    document.getElementById("mine").innerHTML = mine.items.length ? mine.items.map(r => taskCard(r, "mine")).join("") : '<span class="empty">您当前没有负责的任务。</span>';
+    document.getElementById("incoming").innerHTML = incoming.items.length ? incoming.items.map(h => `
+      <div class="item">
+        <div class="title">交接单 #${h.id} · 记录 #${h.record_id}</div>
+        <div class="meta"><span class="tag pending">待您确认</span> 交班人：${esc(h.from_user)}（${esc(h.from_org)}）${h.note ? "　备注：" + esc(h.note) : ""}　发起于 ${fmtTime(h.created_at)}</div>
+        <div class="actions">
+          <button onclick="acceptHandover(${h.id})">确认接班</button>
+          <button class="danger" onclick="declineHandover(${h.id})">拒绝</button>
+          <button class="ghost" onclick="loadDetailById(${h.record_id})">查看办理经过</button>
+        </div>
+      </div>`).join("") : '<span class="empty">没有待您确认的交接。</span>';
+  });
+}
+
+async function claim(id) {
+  await safe(async () => { const r = await api(`/api/records/${id}/claim`, {method: "POST"}); notify(`✓ 认领成功：#${r.id} 现由 ${r.owner_id} 负责`, true); await refreshAll(); });
+}
+
+async function startHandover(id) {
+  await safe(async () => {
+    const toUser = prompt("接班人账号（同一机构的调度员）：");
+    if (!toUser) return;
+    const note = prompt("交接备注（可留空）：") || "";
+    const result = await api(`/api/records/${id}/handovers`, {
+      method: "POST", headers: {...headers(), "Content-Type": "application/json"},
+      body: JSON.stringify({to_user: toUser.trim(), note})
+    });
+    notify(`✓ 已发起交接 #${result.handover.id}，等待 ${result.handover.to_user} 确认；确认前您仍可办理`, true);
+    await refreshAll();
+  });
+}
+
+async function acceptHandover(id) {
+  await safe(async () => {
+    const result = await api(`/api/handovers/${id}/accept`, {method: "POST"});
+    notify(`✓ 已接班：记录 #${result.record.id} 现由 ${result.record.owner_id} 负责，旧账号已转为只读`, true);
+    await refreshAll();
+  });
+}
+
+async function declineHandover(id) {
+  await safe(async () => {
+    const reason = prompt("拒绝原因（可留空）：");
+    if (reason === null) return;
+    await api(`/api/handovers/${id}/decline`, {
+      method: "POST", headers: {...headers(), "Content-Type": "application/json"}, body: JSON.stringify({reason})
+    });
+    notify("✓ 已拒绝该交接，任务仍由原调度员负责", true);
+    await refreshAll();
+  });
+}
+
+function loadDetail() {
+  const id = document.getElementById("detailId").value.trim();
+  if (id) loadDetailById(id);
+}
+
+async function loadDetailById(id) {
+  await safe(async () => {
+    document.getElementById("detailId").value = id;
+    const [r, timeline] = await Promise.all([
+      api(`/api/records/${id}`),
+      api(`/api/records/${id}/audit`)
+    ]);
+    const mine = uid() === r.owner_id;
+    const finished = ["closed", "cancelled"].includes(r.state);
+    let banner = "";
+    if (r.pending_handover) {
+      banner = `<div class="banner"><b>待确认交接：</b>${esc(r.pending_handover.from_user)} → ${esc(r.pending_handover.to_user)}，发起于 ${fmtTime(r.pending_handover.created_at)}。接班人确认前，原调度员仍可办理。</div>`;
+    }
+    if (!mine && r.owner_id && document.getElementById("role").value === "dispatcher") {
+      banner += `<div class="banner readonly"><b>只读：</b>本单当前由 ${esc(r.owner_id)} 负责，您只能查看，不能办理。</div>`;
+    }
+    const canAct = mine && !finished && document.getElementById("role").value === "dispatcher";
+    const actPanel = canAct ? `
+      <div class="actions" style="margin-top:.6rem">
+        <select id="actSelect">
+          <option value="assign">派车 assign</option>
+          <option value="enroute">车辆出发 enroute</option>
+          <option value="cancel">任务取消 cancel</option>
+        </select>
+        <button onclick="runAction(${r.id}, ${r.version})">以版本 ${r.version} 提交办理</button>
+      </div>
+      <p class="meta" style="margin:.4rem 0 0">派车数据固定演示：{"vehicle_available": true, "vehicle_id": "AMB-07"}；出发数据：{"traffic_level":"low"}；取消需填原因。</p>` : "";
+    document.getElementById("detail").innerHTML = `
+      <div class="detail-card">
+        <div class="kv">
+          <div class="k">记录</div><div>#${r.id} ${esc(r.reference)}</div>
+          <div class="k">当前状态</div><div>${esc(STATE_LABELS[r.state] || r.state)}</div>
+          <div class="k">负责人</div><div><b>${esc(r.owner_id || "（待认领）")}</b></div>
+          <div class="k">所属机构</div><div>${esc(r.organization || "—")}</div>
+          <div class="k">版本号</div><div>${r.version}</div>
+        </div>
+        ${banner}${actPanel}
+      </div>
+      <div class="detail-card">
+        <h2 style="margin-bottom:.5rem">办理经过（审计时间线）</h2>
+        <ol class="timeline">${timeline.items.map(e => `
+          <li><b>${esc(ACTION_LABELS[e.action] || e.action)}</b> <span class="when">${fmtTime(e.created_at)} · ${esc(e.actor_id)} · v${e.version}</span>
+          ${e.details && e.details.summary ? "<div>" + esc(e.details.summary) + "</div>" : ""}
+          ${e.details && e.details.to ? "<div>" + esc(e.details.from || "") + " → " + esc(e.details.to) + (e.details.note ? "（" + esc(e.details.note) + "）" : "") + "</div>" : ""}
+          </li>`).join("")}
+        </ol>
+      </div>`;
+  });
+}
+
+async function runAction(id, version) {
+  await safe(async () => {
+    const action = document.getElementById("actSelect").value;
+    let data = {};
+    if (action === "assign") data = {vehicle_available: true, vehicle_id: "AMB-07"};
+    else if (action === "enroute") data = {traffic_level: "low"};
+    else if (action === "cancel") { const reason = prompt("取消原因："); if (!reason) return; data = {cancel_reason: reason}; }
+    const r = await api(`/api/records/${id}/actions/${action}`, {
+      method: "POST", headers: {...headers(), "Content-Type": "application/json"},
+      body: JSON.stringify({expected_version: version, data})
+    });
+    notify(`✓ 已办理：当前状态 ${r.state}，新版本 ${r.version}`, true);
+    await refreshAll();
+    await loadDetailById(id);
+  });
+}
+
+refreshAll();
 </script>
 </body>
 </html>
